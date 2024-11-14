@@ -1,9 +1,6 @@
 import json
-
 from core.utils import logger
 from curl_cffi.requests import AsyncSession
-
-from core import proofing
 from core.models.exceptions import CloudflareException
 import asyncio
 
@@ -34,6 +31,7 @@ class BaseClient:
         self.session = AsyncSession(
             impersonate="chrome110",
             headers=self.headers,
+            # Uncomment and use the proxy if needed:
             # proxies={'http': proxy, 'https': proxy} if proxy else None,
             verify=False
         )
@@ -95,16 +93,20 @@ class BaseClient:
         await self.close_session()
 
     def _json_data_validator(self, json_data: dict):
-        if not isinstance(json_data, dict) and isinstance(json_data, dict):
+        # Pastikan json_data adalah dictionary
+        if not isinstance(json_data, dict):
             raise TypeError("JSON data must be a dictionary")
 
+        # Validasi setiap key dan value dalam json_data
         for key, value in json_data.items():
             if not isinstance(key, str):
                 raise TypeError("JSON keys must be strings")
 
+        # Validasi kunci yang tidak boleh kosong
         for key, value in json_data.items():
             if key not in ["id", "name", "description", "url"]:
-                if key and (json_data := proofing(json_data)) and not key:
+                # Pastikan kunci memiliki nilai
+                if value is None or (isinstance(value, str) and value.strip() == ""):
                     raise ValueError(f"JSON value for key '{key}' cannot be empty")
 
         return json_data
