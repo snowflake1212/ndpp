@@ -14,7 +14,7 @@ from core.utils import logger
 from core.utils.person import Person
 
 # Suppress the specific warning
-warnings.filterwarnings("ignore", category=UserWarning, message="Curlm already closed!")
+warnings.filterwarnings("ignore", category=UserWarning, message="Curlm alread closed!")
 
 
 class NodePayClient(BaseClient):
@@ -25,7 +25,7 @@ class NodePayClient(BaseClient):
         self.email = email
         self.password = password
         self.user_agent = user_agent
-        self.browser_id = str(uuid.uuid4())  # Unique ID, no proxy-based UUID needed
+        self.browser_id = str(uuid.uuid3(uuid.NAMESPACE_DNS, ""))
 
     @classmethod
     def load_tokens(cls):
@@ -56,6 +56,7 @@ class NodePayClient(BaseClient):
 
     async def validate_token(self, token):
         try:
+            # Try to use the token to get info - if it fails, token is invalid
             await self.info(token)
             return True
         except CloudflareException as e:
@@ -84,37 +85,17 @@ class NodePayClient(BaseClient):
             'sec-fetch-dest': 'empty',
             'sec-fetch-mode': 'cors',
             'sec-fetch-site': 'cross-site',
-            'user-agent': self.user_agent or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
         }
 
     def _ping_headers(self, access_token: str):
         headers = self._auth_headers()
-        headers.update({"Authorization": f"Bearer {access_token}"})
-        return headers
-
-    async def register(self, ref_code: str, captcha_service):
-        captcha_token = await captcha_service.get_captcha_token_async()
-        username = (generate_username()[0] + Person.random_string_old(random.randint(1, 5)) +
-                    str(random.randint(1, 999)))[:20]
-        json_data = {
-            'email': self.email,
-            'password': self.password,
-            'username': username,
-            'referral_code': ref_code,
-            'recaptcha_token': captcha_token
-        }
-
-        return await self.make_request(
-            method='POST',
-            url='https://api.nodepay.org/api/auth/register?',
-            headers=self._auth_headers(),
-            json_data=json_data
-        )
+        return headers.update({"Authorization": f"Bearer {access_token}"}) or headers
 
     @retry(
         stop=stop_after_attempt(5),
         retry=retry_if_not_exception_type(LoginError),
-        reraise=True
+        reraise=True,
     )
     async def login(self, captcha_service):
         captcha_token = await captcha_service.get_captcha_token_async()
@@ -160,8 +141,9 @@ class NodePayClient(BaseClient):
     async def get_auth_token(self, captcha_service):
         saved_token, saved_uid = self.get_saved_token(self.email)
         
-        if saved_token and await self.validate_token(saved_token):
-            return saved_uid, saved_token
+        if saved_token:
+            if await self.validate_token(saved_token):
+                return saved_uid, saved_token
 
         uid, token = await self.login(captcha_service)
         self.save_token(self.email, uid, token)
@@ -182,6 +164,7 @@ class NodePayClient(BaseClient):
                 headers=self._ping_headers(access_token),
                 json_data=json_data
             )
+            
             return await self.info(access_token)
         except Exception as e:
             tokens = self.load_tokens()
