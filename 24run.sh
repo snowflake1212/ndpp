@@ -14,5 +14,5 @@ python3 random_gtvpn.py JP KR US RO TH VN BR MY QA RU ZZ ID AR &
 sleep 20
 
 echo "Running grass.py..."
-pkill -f npbot.py
-python3 npbot.py &
+#pkill -f npbot.py
+#python3 npbot.py &
