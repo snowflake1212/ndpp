@@ -10,7 +10,7 @@ sleep 5
 rm -f rvpdn.py &&
 wget https://raw.githubusercontent.com/snowflake1212/ndpp/refs/heads/main/rvpdn.py &&
 chmod +x rvpdn.py
-python3 random_gtvpn.py JP KR US RO TH VN BR MY QA RU ZZ ID AR &
+python3 random_gtvpn.py JP KR &
 sleep 20
 
 echo "Running grass.py..."
