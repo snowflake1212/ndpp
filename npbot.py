@@ -1,21 +1,23 @@
-import asyncio
-import aiohttp
+import threading
 import time
 import uuid
-import random
+import cloudscraper
 from loguru import logger
-import sys
+from concurrent.futures import ThreadPoolExecutor
 from fake_useragent import UserAgent
 
 # Inisialisasi fake_useragent
-user_agent = UserAgent()
+try:
+    user_agent = UserAgent()
+    session_user_agent = user_agent.random  # Ambil satu User-Agent untuk sesi ini
+except Exception:
+    session_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"  # Fallback
 
-# Customize loguru to use color for different log levels
-logger.remove()
-logger.add(sys.stdout, format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{message}</level>", colorize=True)
+# Constants
+PING_INTERVAL = 60
+RETRIES = 200
 
-PING_INTERVAL = 180
-DOMAIN_API = {
+DOMAIN_API_ENDPOINTS = {
     "SESSION": [
         "http://api.nodepay.ai/api/auth/session"
     ],
@@ -27,6 +29,22 @@ DOMAIN_API = {
     ]
 }
 
+CONNECTION_STATES = {
+    "CONNECTED": 1,
+    "DISCONNECTED": 2,
+    "NONE_CONNECTION": 3
+}
+
+status_connect = CONNECTION_STATES["NONE_CONNECTION"]
+browser_id = None
+account_info = {}
+last_ping_time = {}
+ping_index = 0  # To track the current ping API
+
+# Logger Configuration
+logger.remove()
+logger.add(lambda msg: print(msg, end=""), level="INFO")
+
 def uuidv4():
     return str(uuid.uuid4())
 
@@ -35,107 +53,102 @@ def valid_resp(resp):
         raise ValueError("Invalid response")
     return resp
 
-async def call_api(urls, data, token, user_agent, max_retries=3):
-    """
-    Mencoba alamat URL secara acak dari daftar jika terjadi kegagalan.
-    """
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
-        for attempt in range(max_retries):
-            random.shuffle(urls)  # Acak daftar URL
-            for url in urls:
-                headers = {
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                    "User-Agent": user_agent,
-                    "Accept": "application/json"
-                }
-                try:
-                    logger.info(f"Attempt {attempt + 1}: Calling {url} with headers {headers}")
-                    async with session.post(url, json=data, headers=headers, timeout=10) as response:
-                        response.raise_for_status()
-                        resp_json = await response.json()
-                        return valid_resp(resp_json)
-                except Exception as e:
-                    logger.warning(f"Error calling {url}: {e}")
-            logger.info(f"Retrying after {2 ** attempt} seconds...")
-            await asyncio.sleep(2 ** attempt)
-    logger.error(f"Failed to contact any of the provided URLs after {max_retries} retries.")
-    return None
+def get_next_ping_api():
+    global ping_index
+    ping_api = DOMAIN_API_ENDPOINTS["PING"][ping_index]
+    ping_index = (ping_index + 1) % len(DOMAIN_API_ENDPOINTS["PING"])  # Cycle through endpoints
+    return ping_api
 
-async def render_profile_info(token, user_agent):
-    browser_id = uuidv4()
-    account_info = {}
+def call_api(url, data, token):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "User-Agent": session_user_agent,  # Menggunakan User-Agent dari sesi
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": "https://app.nodepay.ai",
+    }
 
     try:
-        logger.info("Fetching session data...")
-        session_url = random.choice(DOMAIN_API["SESSION"])  # Pilih URL session secara random
-        response = await call_api([session_url], {}, token, user_agent)
-        if response:
-            account_info = response.get("data", {})
-            logger.info(f"Session established for browser_id={browser_id}, account_info={account_info}")
-            await start_ping(token, browser_id, account_info, user_agent)
-        else:
-            logger.warning("Failed to fetch session data.")
-    except Exception as e:
-        logger.error(f"Error in render_profile_info: {e}")
+        scraper = cloudscraper.create_scraper()
+        response = scraper.post(url, json=data, headers=headers, timeout=30)
 
-async def start_ping(token, browser_id, account_info, user_agent):
-    last_ping_time = None
+        response.raise_for_status()
+        return valid_resp(response.json())
+    except Exception:
+        raise ValueError(f"Failed API call to {url}")
+
+def start_ping(token):
+    global last_ping_time, RETRIES, status_connect
+
+    while True:
+        current_time = time.time()
+
+        try:
+            ping_url = get_next_ping_api()  # Get the next ping API
+            data = {
+                "id": account_info.get("uid"),
+                "browser_id": browser_id,
+                "timestamp": int(time.time())
+            }
+
+            response = call_api(ping_url, data, token)
+            if response["code"] == 0:
+                logger.info(f"Ping sent successfully to {ping_url}: {response}")
+                RETRIES = 0
+                status_connect = CONNECTION_STATES["CONNECTED"]
+            else:
+                handle_ping_fail(response)
+        except Exception:
+            handle_ping_fail(None)
+
+        time.sleep(PING_INTERVAL)
+
+def handle_ping_fail(response):
+    global RETRIES, status_connect
+
+    RETRIES += 1
+    status_connect = CONNECTION_STATES["DISCONNECTED"]
+
+def render_profile_info(token):
+    global browser_id, account_info
+
     try:
-        while True:
-            await ping(token, browser_id, account_info, last_ping_time, user_agent)
-            await asyncio.sleep(PING_INTERVAL)
-    except asyncio.CancelledError:
-        logger.info("Ping task was cancelled.")
-    except Exception as e:
-        logger.error(f"Error in start_ping: {e}")
+        browser_id = uuidv4()
+        response = call_api(DOMAIN_API_ENDPOINTS["SESSION"][0], {}, token)
+        valid_resp(response)
+        account_info = response["data"]
+        if account_info.get("uid"):
+            start_ping(token)
+    except Exception:
+        pass  # Suppress errors to focus only on ping messages
 
-async def ping(token, browser_id, account_info, last_ping_time, user_agent):
-    current_time = time.time()
-    if last_ping_time and (current_time - last_ping_time) < PING_INTERVAL:
-        return
-
+def load_tokens(token_file):
     try:
-        data = {
-            "id": account_info.get("uid"),
-            "browser_id": browser_id,
-            "timestamp": int(current_time),
-            "version": '2.2.7'
-        }
-        ping_urls = DOMAIN_API["PING"]  # Daftar URL PING
-        response = await call_api(ping_urls, data, token, user_agent)
-        if response and response.get("code") == 0:
-            logger.info(f"Ping successful: {response}")
-        else:
-            logger.warning(f"Ping failed: {response}")
-    except Exception as e:
-        logger.error(f"Error in ping: {e}")
-
-async def run_with_token(token, user_agent):
-    logger.info(f"Starting session for token: {token} with User-Agent: {user_agent}")
-    await render_profile_info(token, user_agent)
-    logger.info(f"Session completed for token: {token}")
-
-async def main():
-    # Baca token dari file tokens.txt
-    try:
-        with open("tokens.txt", "r") as file:
+        with open(token_file, 'r') as file:
             tokens = [line.strip() for line in file if line.strip()]
-    except FileNotFoundError:
-        logger.error("File 'tokens.txt' tidak ditemukan.")
-        return
+        return tokens
+    except Exception as e:
+        logger.error(f"Failed to load tokens: {e}")
+        raise SystemExit("Exiting due to failure in loading tokens")
 
-    # Buat User-Agent unik untuk setiap token
-    user_agents = {token: user_agent.random for token in tokens}
+def run_for_token(token):
+    try:
+        render_profile_info(token)
+    except Exception:
+        pass  # Suppress errors to focus only on ping messages
 
-    # Buat tasks untuk setiap token dengan User-Agent masing-masing
-    tasks = [run_with_token(token, user_agents[token]) for token in tokens]
+def main():
+    tokens = load_tokens('tokens.txt')
 
-    # Jalankan semua tasks secara paralel
-    await asyncio.gather(*tasks)
+    threads = []
+    for token in tokens:
+        thread = threading.Thread(target=run_for_token, args=(token,))
+        threads.append(thread)
+        thread.start()
+
+    for thread in threads:
+        thread.join()
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Program terminated by user.")
+    main()
