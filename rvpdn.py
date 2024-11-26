@@ -15,7 +15,7 @@ MAX_RETRY_LIMIT = 1  # Batas percobaan koneksi ke setiap server
 CONNECTION_TIMEOUT = 10  # Timeout untuk requests.get dalam detik
 VPN_CONNECTION_TIMEOUT = 10  # Timeout koneksi untuk memastikan stabilitas
 CHECK_IP_TIMEOUT = 5  # Timeout untuk mengecek IP setelah terhubung ke VPN
-HAPUS_IPS = ["111.217.191.8", "133.175.28.203"]  # IP default yang harus dicek setiap 5 menit
+HAPUS_IPS = ["150.136.63.92", "133.175.28.203"]  # IP default yang harus dicek setiap 5 menit
 LOG_FILE = '/home/python/log_ovpn.txt'  # Lokasi file log di host
 
 # Mengecek argumen input untuk menerima lebih dari satu negara
