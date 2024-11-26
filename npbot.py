@@ -2,8 +2,13 @@ import asyncio
 import aiohttp
 import time
 import uuid
+import random
 from loguru import logger
 import sys
+from fake_useragent import UserAgent
+
+# Inisialisasi fake_useragent
+user_agent = UserAgent()
 
 # Customize loguru to use color for different log levels
 logger.remove()
@@ -11,8 +16,15 @@ logger.add(sys.stdout, format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <leve
 
 PING_INTERVAL = 180
 DOMAIN_API = {
-    "SESSION": "http://api.nodepay.ai/api/auth/session",
-    "PING": "http://18.139.20.49/api/network/ping"
+    "SESSION": [
+        "http://api.nodepay.ai/api/auth/session"
+    ],
+    "PING": [
+        "http://13.215.134.222/api/network/ping",
+        "http://18.139.20.49/api/network/ping",
+        "http://52.74.35.173/api/network/ping",
+        "http://52.77.10.116/api/network/ping"
+    ]
 }
 
 def uuidv4():
@@ -23,54 +35,62 @@ def valid_resp(resp):
         raise ValueError("Invalid response")
     return resp
 
-async def call_api(url, data, token, max_retries=3):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36",
-        "Accept": "application/json"
-    }
-
+async def call_api(urls, data, token, user_agent, max_retries=3):
+    """
+    Mencoba alamat URL secara acak dari daftar jika terjadi kegagalan.
+    """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
         for attempt in range(max_retries):
-            try:
-                async with session.post(url, json=data, headers=headers, timeout=10) as response:
-                    response.raise_for_status()
-                    resp_json = await response.json()
-                    return valid_resp(resp_json)
-            except Exception as e:
-                logger.warning(f"Error on attempt {attempt + 1} for {url}: {e}")
-                await asyncio.sleep(2 ** attempt)
+            random.shuffle(urls)  # Acak daftar URL
+            for url in urls:
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "User-Agent": user_agent,
+                    "Accept": "application/json"
+                }
+                try:
+                    logger.info(f"Attempt {attempt + 1}: Calling {url} with headers {headers}")
+                    async with session.post(url, json=data, headers=headers, timeout=10) as response:
+                        response.raise_for_status()
+                        resp_json = await response.json()
+                        return valid_resp(resp_json)
+                except Exception as e:
+                    logger.warning(f"Error calling {url}: {e}")
+            logger.info(f"Retrying after {2 ** attempt} seconds...")
+            await asyncio.sleep(2 ** attempt)
+    logger.error(f"Failed to contact any of the provided URLs after {max_retries} retries.")
     return None
 
-async def render_profile_info(token):
+async def render_profile_info(token, user_agent):
     browser_id = uuidv4()
     account_info = {}
 
     try:
         logger.info("Fetching session data...")
-        response = await call_api(DOMAIN_API["SESSION"], {}, token)
+        session_url = random.choice(DOMAIN_API["SESSION"])  # Pilih URL session secara random
+        response = await call_api([session_url], {}, token, user_agent)
         if response:
             account_info = response.get("data", {})
             logger.info(f"Session established for browser_id={browser_id}, account_info={account_info}")
-            await start_ping(token, browser_id, account_info)
+            await start_ping(token, browser_id, account_info, user_agent)
         else:
             logger.warning("Failed to fetch session data.")
     except Exception as e:
         logger.error(f"Error in render_profile_info: {e}")
 
-async def start_ping(token, browser_id, account_info):
+async def start_ping(token, browser_id, account_info, user_agent):
     last_ping_time = None
     try:
         while True:
-            await ping(token, browser_id, account_info, last_ping_time)
+            await ping(token, browser_id, account_info, last_ping_time, user_agent)
             await asyncio.sleep(PING_INTERVAL)
     except asyncio.CancelledError:
         logger.info("Ping task was cancelled.")
     except Exception as e:
         logger.error(f"Error in start_ping: {e}")
 
-async def ping(token, browser_id, account_info, last_ping_time):
+async def ping(token, browser_id, account_info, last_ping_time, user_agent):
     current_time = time.time()
     if last_ping_time and (current_time - last_ping_time) < PING_INTERVAL:
         return
@@ -82,7 +102,8 @@ async def ping(token, browser_id, account_info, last_ping_time):
             "timestamp": int(current_time),
             "version": '2.2.7'
         }
-        response = await call_api(DOMAIN_API["PING"], data, token)
+        ping_urls = DOMAIN_API["PING"]  # Daftar URL PING
+        response = await call_api(ping_urls, data, token, user_agent)
         if response and response.get("code") == 0:
             logger.info(f"Ping successful: {response}")
         else:
@@ -90,9 +111,9 @@ async def ping(token, browser_id, account_info, last_ping_time):
     except Exception as e:
         logger.error(f"Error in ping: {e}")
 
-async def run_with_token(token):
-    logger.info(f"Starting session for token: {token}")
-    await render_profile_info(token)
+async def run_with_token(token, user_agent):
+    logger.info(f"Starting session for token: {token} with User-Agent: {user_agent}")
+    await render_profile_info(token, user_agent)
     logger.info(f"Session completed for token: {token}")
 
 async def main():
@@ -104,8 +125,11 @@ async def main():
         logger.error("File 'tokens.txt' tidak ditemukan.")
         return
 
-    # Buat tasks untuk setiap token
-    tasks = [run_with_token(token) for token in tokens]
+    # Buat User-Agent unik untuk setiap token
+    user_agents = {token: user_agent.random for token in tokens}
+
+    # Buat tasks untuk setiap token dengan User-Agent masing-masing
+    tasks = [run_with_token(token, user_agents[token]) for token in tokens]
 
     # Jalankan semua tasks secara paralel
     await asyncio.gather(*tasks)
