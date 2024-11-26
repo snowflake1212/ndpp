@@ -83,8 +83,8 @@ for server in supported:
 # Menghapus file konfigurasi spesifik
 pattern = re.compile(r"^(21999|22122)\..*\.ovpn$")
 special_files = [
-    '223.134.156.41.ovpn',
-    '106.150.249.101.ovpn',
+    '223.134.156.4123.ovpn',
+    '106.150.249.1010.ovpn',
 ]
 
 for file_path in glob.glob('ovpn/*.ovpn'):
