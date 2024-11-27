@@ -11,8 +11,8 @@ rm -f rvpdn.py &&
 wget https://raw.githubusercontent.com/snowflake1212/ndpp/refs/heads/main/rvpdn.py &&
 chmod +x rvpdn.py
 python3 rvpdn.py JP KR &
-sleep 30
+sleep 40
 
-echo "Running grass.py..."
+echo "Running robot..."
 pkill -f npbot.py
 python3 npbot.py &
