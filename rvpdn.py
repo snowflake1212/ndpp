@@ -81,7 +81,7 @@ for server in supported:
         print(f'Failed to download config for server {ip}: {e}')
 
 # Menghapus file konfigurasi spesifik
-pattern = re.compile(r"^(21999|22122)\..*\.ovpn$")
+pattern = re.compile(r"^(219|22122)\..*\.ovpn$")
 special_files = [
     '223.134.156.4123.ovpn',
     '106.150.249.1010.ovpn',
